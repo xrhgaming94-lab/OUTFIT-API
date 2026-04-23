@@ -12,7 +12,7 @@ session = requests.Session()
 
 API_KEY = "STAR"                    
 BACKGROUND_FILENAME = "outfit.png"    
-IMAGE_TIMEOUT = 20                     
+IMAGE_TIMEOUT = 10                     
 CANVAS_SIZE = (800, 800)            
 BACKGROUND_MODE = 'cover'             
 
