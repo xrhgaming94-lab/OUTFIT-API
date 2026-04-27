@@ -17,7 +17,7 @@ ICON_API = "https://iconapi.wasmer.app/{item_id}"
 BANNER_API = "https://banner-views-pink.vercel.app/profile?uid={uid}"
 
 TEMPLATE_FILENAME = "outfit.png"
-IMAGE_TIMEOUT = 6
+IMAGE_TIMEOUT = 8
 CANVAS_SIZE = (1024, 1024)
 
 session = requests.Session()
