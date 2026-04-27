@@ -1,130 +1,286 @@
-#SRC MADE BY - STAR GAMER
 from flask import Flask, request, jsonify, send_file
 import requests
-from PIL import Image
+from PIL import Image, ImageDraw
 from io import BytesIO
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 
 app = Flask(__name__)
-executor = ThreadPoolExecutor(max_workers=10)
+
+executor = ThreadPoolExecutor(max_workers=24)
+
+# Updated info API
+INFO_API = "https://star-info.vercel.app/player-info?uid={uid}"
+CHAR_API = "https://character-api-vaibhav-production.up.railway.app/api/{avatar_id}"
+RAW_CHAR_FALLBACK = "https://raw.githubusercontent.com/hackervaibhav-dot/character-api-vaibhav/main/pngs/{filename}"
+ICON_API = "https://iconapi.wasmer.app/{item_id}"
+BANNER_API = "https://banner-views-pink.vercel.app/profile?uid={uid}"
+
+TEMPLATE_FILENAME = "outfit.png"
+IMAGE_TIMEOUT = 6
+CANVAS_SIZE = (1024, 1024)
+
 session = requests.Session()
 
-API_KEY = "STAR"                    
-BACKGROUND_FILENAME = "outfit.png"    
-IMAGE_TIMEOUT = 20                    
-CANVAS_SIZE = (800, 800)            
-BACKGROUND_MODE = 'cover'             
+# connection reuse
+adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
+session.mount("http://", adapter)
+session.mount("https://", adapter)
 
-def fetch_player_info(uid: str):
-    url = f"https://infoooooo-v6v5.vercel.app/accinfo?uid={uid}"
+session.headers.update({
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "*/*",
+})
+
+# COORDS
+
+CHAR_BOX = (300, 110, 420, 830)
+
+WEAPON_BOX = (655, 555, 350, 179)
+ENTRY_BOX = (748, 740, 155, 155)
+
+HEX_SLOTS = {
+    "pant":     (130, 110, 210, 210),
+    "top":      (760, 115, 220, 220),
+    "gloves":   (780, 290, 220, 220),
+    "shoes":    (790, 380, 180, 220),
+    "skywing":  (18, 290, 215, 215),
+    "styling":  (18, 540, 215, 185),
+    "headskin": (140, 695, 185, 215),
+}
+
+SLOT_PADDING = {
+    "pant": 10,
+    "top": 14,
+    "shoes": 14,
+    "gloves": 18,
+    "skywing": 14,
+    "styling": 14,
+    "headskin": 18,
+}
+
+SLOT_ALIGN = {
+    "pant": ("center", "center"),
+    "top": ("center", "center"),
+    "shoes": ("center", "center"),
+    "gloves": ("center", "center"),
+    "skywing": ("center", "center"),
+    "styling": ("center", "center"),
+    "headskin": ("center", "center"),
+}
+
+SLOT_OFFSET = {
+  "top": (-92, -12),
+  "shoes": (0, -82),
+}
+
+BANNER_BOX = (340, 10, 345, 90)
+
+# helpers
+
+def fetch_json(url):
     try:
-        resp = session.get(url, timeout=IMAGE_TIMEOUT)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception:
+        r = session.get(url, timeout=IMAGE_TIMEOUT)
+        return r.json()
+    except:
         return None
 
-def fetch_and_process_image(image_url: str, size: tuple = None):
+def fetch_image_any(url):
     try:
-        resp = session.get(image_url, timeout=IMAGE_TIMEOUT)
-        resp.raise_for_status()
-        img = Image.open(BytesIO(resp.content)).convert("RGBA")
-        if size:
-            img = img.resize(size, Image.LANCZOS)
-        return img
-    except Exception:
+        r = session.get(url, timeout=IMAGE_TIMEOUT)
+        ctype = (r.headers.get("content-type") or "").lower()
+
+        if "application/json" in ctype:
+            j = r.json()
+            img_url = (
+                j.get("url")
+                or j.get("image")
+                or j.get("png")
+                or j.get("link")
+                or j.get("banner")
+                or j.get("bannerUrl")
+                or j.get("banner_url")
+            )
+            if img_url:
+                r = session.get(img_url, timeout=IMAGE_TIMEOUT)
+
+        return Image.open(BytesIO(r.content)).convert("RGBA")
+    except:
         return None
 
-@app.route('/outfit-image', methods=['GET'])
-def outfit_image():
-    uid = request.args.get('uid')
-    key = request.args.get('key')
+def trim_transparent(img):
+    alpha = img.split()[-1]
+    bbox = alpha.getbbox()
+    return img.crop(bbox) if bbox else img
 
-    if key != API_KEY:
-        return jsonify({'error': 'Invalid or missing API key'}), 401
-    if not uid:
-        return jsonify({'error': 'Missing uid parameter'}), 400
+def resize_contain(img, w, h):
+    iw, ih = img.size
+    scale = min(w/iw, h/ih)
+    nw = int(iw*scale)
+    nh = int(ih*scale)
+    return img.resize((nw, nh), Image.LANCZOS)
 
-    player_data = fetch_player_info(uid)
-    if not player_data:
-        return jsonify({'error': 'Failed to fetch player info'}), 500
+def paste_in_box(canvas, img, box, pad=12, align=("center","center"), offset=(0,0)):
+    x, y, w, h = box
 
-    profile_info = player_data.get("profileInfo", {})
-    outfit_ids = profile_info.get("equippedSkills", []) or []
+    img = trim_transparent(img)
 
-    required_starts = ["211", "214", "211", "203", "204", "205", "203"]
-    fallback_ids = ["211000000", "214000000", "208000000", "203000000",
-                    "204000000", "205000000", "212000000"]
+    img2 = resize_contain(img, w-pad, h-pad)
 
-    used_ids = set()
+    px = x + (w - img2.size[0]) // 2
+    py = y + (h - img2.size[1]) // 2
 
-    def fetch_outfit_image(idx, code):
-        matched = None
-        for oid in outfit_ids:
-            str_oid = str(oid)
-            if str_oid.startswith(code) and str_oid not in used_ids:
-                matched = str_oid
-                used_ids.add(str_oid)
-                break
-        if matched is None:
-            matched = fallback_ids[idx]
-        url = f'https://iconapi.wasmer.app/{matched}'
-        return fetch_and_process_image(url, size=(150, 150))
+    px += offset[0]
+    py += offset[1]
 
-    futures = [executor.submit(fetch_outfit_image, idx, code)
-               for idx, code in enumerate(required_starts)]
+    canvas.paste(img2, (px, py), img2)
 
-    bg_path = os.path.join(os.path.dirname(__file__), BACKGROUND_FILENAME)
-    try:
-        background = Image.open(bg_path).convert("RGBA")
-    except FileNotFoundError:
-        return jsonify({'error': f'Background image missing: {BACKGROUND_FILENAME}'}), 500
+def safe_text(draw, xy, text):
+    draw.text(xy, str(text), fill=(220,255,220,255))
 
-    bg_w, bg_h = background.size
+def pick_first_by_prefix(ids, prefix, used, skip_prefixes=None):
+    skip_prefixes = skip_prefixes or set()
+    for v in ids:
+        s = str(v)
+        if s in used:
+            continue
+        if any(s.startswith(sp) for sp in skip_prefixes):
+            continue
+        if s.startswith(prefix):
+            used.add(s)
+            return s
+    return None
 
-    if CANVAS_SIZE:
-        canvas_w, canvas_h = CANVAS_SIZE
-        scale = max(canvas_w / bg_w, canvas_h / bg_h) if BACKGROUND_MODE == 'cover' \
-                else min(canvas_w / bg_w, canvas_h / bg_h)
-        new_w, new_h = int(bg_w * scale), int(bg_h * scale)
-        bg_resized = background.resize((new_w, new_h), Image.LANCZOS)
-        offset_x = (canvas_w - new_w) // 2
-        offset_y = (canvas_h - new_h) // 2
-        canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
-        canvas.paste(bg_resized, (offset_x, offset_y), bg_resized)
-    else:
-        canvas = background.copy()
-        canvas_w, canvas_h = bg_w, bg_h
-        offset_x = offset_y = 0
-        scale = 1.0
+def map_clothes_to_slots(clothes):
+    clothes = clothes or []
+    used = set()
+    skip = {"214"}
 
-    positions = [
-        {'x': 350, 'y': 30, 'width': 150, 'height': 150},   
-        {'x': 575, 'y': 130, 'width': 150, 'height': 150},  
-        {'x': 665, 'y': 350, 'width': 150, 'height': 150}, 
-        {'x': 575, 'y': 550, 'width': 150, 'height': 150},  
-        {'x': 350, 'y': 654, 'width': 150, 'height': 150},  
-        {'x': 135, 'y': 570, 'width': 150, 'height': 150},  
-        {'x': 135, 'y': 130, 'width': 150, 'height': 150}   
-    ]
+    pant = pick_first_by_prefix(clothes, "204", used, skip)
+    top = pick_first_by_prefix(clothes, "203", used, skip)
+    shoes = pick_first_by_prefix(clothes, "205", used, skip)
+    styling = pick_first_by_prefix(clothes, "211", used, skip)
+    skywing = pick_first_by_prefix(clothes, "212", used, skip)
+    gloves = pick_first_by_prefix(clothes, "208", used, skip)
 
-    for idx, future in enumerate(futures):
-        img = future.result()
+    return {
+        "pant": pant,
+        "top": top,
+        "shoes": shoes,
+        "styling": styling,
+        "skywing": skywing,
+        "gloves": gloves,
+    }
+
+def classify_weapon_entry(item_imgs):
+    valid = []
+    for item_id, img in item_imgs:
         if not img:
             continue
-        pos = positions[idx]
-        paste_x = offset_x + int(pos['x'] * scale)
-        paste_y = offset_y + int(pos['y'] * scale)
-        paste_w = max(1, int(pos['width'] * scale))
-        paste_h = max(1, int(pos['height'] * scale))
-        resized = img.resize((paste_w, paste_h), Image.LANCZOS)
-        canvas.paste(resized, (paste_x, paste_y), resized)
+        w, h = img.size
+        if h <= 0:
+            continue
+        ar = w/h
+        valid.append((item_id, img, ar))
 
-    output = BytesIO()
-    canvas.save(output, format='PNG')
-    output.seek(0)
-    return send_file(output, mimetype='image/png')
+    if not valid:
+        return None, None
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    weapon = max(valid, key=lambda x: x[2])
+    remaining = [v for v in valid if v[0] != weapon[0]]
+    entry = None
+    if remaining:
+        entry = min(remaining, key=lambda x: abs(x[2] - 1.0))
+
+    return (weapon[0], weapon[1]), (entry[0], entry[1]) if entry else None
+
+@app.route("/outfit-card", methods=["GET"])
+def outfit_card():
+    uid = request.args.get("uid")
+    if not uid:
+        return jsonify({"error": "Missing uid"}), 400
+
+    data = fetch_json(INFO_API.format(uid=uid))
+    if not data:
+        return jsonify({"error": "player fetch fail"}), 500
+
+    basic = data.get("basicInfo") or {}
+    profile = data.get("profileInfo") or {}
+    clan = data.get("clanBasicInfo") or {}
+
+    nickname = basic.get("nickname") or ""
+    level = basic.get("level") or ""
+    liked = basic.get("liked") or ""
+    region = basic.get("region") or ""
+    avatar_id = str(profile.get("avatarId") or "")
+
+    base = Image.open(TEMPLATE_FILENAME).convert("RGBA")
+    if base.size != CANVAS_SIZE:
+        base = base.resize(CANVAS_SIZE)
+    draw = ImageDraw.Draw(base)
+
+    # PARALLEL TASKS
+    futures = {}
+    futures["banner"] = executor.submit(fetch_image_any, BANNER_API.format(uid=uid))
+
+    if avatar_id:
+        futures["char"] = executor.submit(fetch_image_any, CHAR_API.format(avatar_id=avatar_id))
+
+    clothes = profile.get("clothes", []) or []
+    mapped = map_clothes_to_slots(clothes)
+
+    for slot, item in mapped.items():
+        if item:
+            futures[slot] = executor.submit(fetch_image_any, ICON_API.format(item_id=item))
+
+    skins = basic.get("weaponSkinShows", []) or []
+    for i, sid in enumerate(skins[:6]):
+        futures[f"skin{i}"] = executor.submit(fetch_image_any, ICON_API.format(item_id=str(sid)))
+
+    results = {k: f.result() for k, f in futures.items()}
+
+    banner = results.get("banner")
+    if banner:
+        paste_in_box(base, banner, BANNER_BOX)
+
+    char = results.get("char")
+    if char:
+        paste_in_box(base, char, CHAR_BOX)
+
+    for slot in mapped:
+        img = results.get(slot)
+        if img:
+            paste_in_box(base, img, HEX_SLOTS[slot], offset=SLOT_OFFSET.get(slot, (0, 0)))
+
+    skin_imgs = []
+    for i, sid in enumerate(skins[:6]):
+        skin_imgs.append((str(sid), results.get(f"skin{i}")))
+
+    weapon_pick, entry_pick = classify_weapon_entry(skin_imgs)
+    if weapon_pick:
+        paste_in_box(base, weapon_pick[1], WEAPON_BOX)
+    if entry_pick:
+        paste_in_box(base, entry_pick[1], ENTRY_BOX)
+
+    # Draw text info
+    safe_text(draw, (35, 35), nickname)
+    safe_text(draw, (35, 80), f"Level {level} | ♥ {liked}")
+    safe_text(draw, (35, 120), f"UID {uid} | {region}")
+
+    member_num = clan.get("memberNum")
+    capacity = clan.get("capacity")
+    if member_num and capacity:
+        safe_text(draw, (35, 160), f"Clan: {member_num}/{capacity}")
+
+    out = BytesIO()
+    base.save(out, "PNG")
+    out.seek(0)
+    return send_file(out, mimetype="image/png")
+
+@app.route("/favicon.ico")
+def favicon():
+    return ("", 204)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
