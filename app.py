@@ -10,10 +10,10 @@ app = Flask(__name__)
 executor = ThreadPoolExecutor(max_workers=24)
 
 # Updated info API
-INFO_API = "https://star-info.vercel.app/player-info?uid={uid}"
+INFO_API = "https://stargamerff.qzz.io/accinfo?uid={uid}"
 CHAR_API = "https://character-api-vaibhav-production.up.railway.app/api/{avatar_id}"
 RAW_CHAR_FALLBACK = "https://raw.githubusercontent.com/hackervaibhav-dot/character-api-vaibhav/main/pngs/{filename}"
-ICON_API = "https://iconapi.wasmer.app/{item_id}"
+ICON_API = "https://cdn.jsdelivr.net/gh/ShahGCreator/icon@main/PNG/{item_id}.png"
 BANNER_API = "https://banner-views-pink.vercel.app/profile?uid={uid}"
 
 TEMPLATE_FILENAME = "outfit.png"
