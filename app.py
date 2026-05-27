@@ -74,9 +74,6 @@ def outfit_image():
     profile = data.get("profileInfo", {})
 
     clothes = profile.get("clothes") or []
-    
-    # ✅ Get avatarId from profileInfo (yehi character ID hai)
-    avatar_id = profile.get("avatarId")
 
     draw_tasks = {
         "mask":   clothes[0] if len(clothes) > 0 else None,
@@ -87,8 +84,9 @@ def outfit_image():
         "armor":  clothes[5] if len(clothes) > 5 else None,
         "weapon": basic.get("weaponSkinShows", [None])[0] if basic.get("weaponSkinShows") else None,
         "pet":    data.get("petInfo", {}).get("skinId"),
-        # ✅ Use avatarId from API, fallback to DEFAULT_ID if not found
-        "character": avatar_id if avatar_id else DEFAULT_ID
+
+        # ✅ default character
+        "character": DEFAULT_ID
     }
 
     if not os.path.exists(BACKGROUND_FILENAME):
